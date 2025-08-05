@@ -1,43 +1,45 @@
-import socket
-import threading
+import asyncio
+import websockets
+import json
+from datetime import datetime
 
-clients = {}
+CONNECTIONS = set()
 
-def handle_client(client_socket, addr):
-    nickname = client_socket.recv(1024).decode()
-    clients[nickname] = client_socket
-    broadcast(f"{nickname} joined the chat!".encode())
-
-    while True:
+async def broadcast(message, sender=None):
+    for connection in CONNECTIONS:
         try:
-            message = client_socket.recv(1024)
-            if not message:
-                break
-            broadcast(message, nickname)
+            if connection != sender:
+                await connection.send(message)
         except:
-            break
+            pass
 
-    del clients[nickname]
-    broadcast(f"{nickname} left the chat!".encode())
-    client_socket.close()
+async def handle_client(websocket):
+    CONNECTIONS.add(websocket)
+    try:
+        async for message in websocket:
+            try:
+                data = json.loads(message)
+                if "sender" not in data or "message" not in data:
+                    continue
+                
+                data["timestamp"] = datetime.now().isoformat()
+                await broadcast(json.dumps(data), websocket)
+            except json.JSONDecodeError:
+                continue
+    finally:
+        CONNECTIONS.remove(websocket)
 
-def broadcast(message, sender=None):
-    for nickname, client_socket in clients.items():
-        if sender and nickname != sender:
-            client_socket.send(message)
-
-def start_server(host, port):
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.bind((host, port))
-    server_socket.listen(5)
-    print(f"Server listening on {host}:{port}")
-
-    while True:
-        client_socket, addr = server_socket.accept()
-        print(f"Connection from {addr}")
-        threading.Thread(target=handle_client, args=(client_socket, addr)).start()
+async def main():
+    # Важно: 0.0.0.0 делает сервер доступным на всех интерфейсах
+    async with websockets.serve(
+        handle_client, 
+        "0.0.0.0",  # Слушаем все интерфейсы
+        8765,        # Порт
+        reuse_port=True
+    ):
+        print("Сервер запущен на 0.0.0.0:8765")
+        print("Доступен по вашему внешнему IP")
+        await asyncio.Future()
 
 if __name__ == "__main__":
-    host = input("Enter server IP address: ")
-    port = int(input("Enter server port: "))
-    start_server(host, port)
+    asyncio.run(main())
